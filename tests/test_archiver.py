@@ -28,6 +28,13 @@ def _error_response(status_code):
     return resp
 
 
+def _rate_limit_response():
+    resp = MagicMock()
+    resp.status_code = 429
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
 class TestArchiveCard(unittest.TestCase):
 
     @patch("src.archiver.requests.put")
@@ -78,6 +85,43 @@ class TestArchiveCard(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertIn(CARD_ID, result["message"])
+
+
+class TestArchiveCardRetry(unittest.TestCase):
+
+    @patch("src.archiver.time.sleep")
+    @patch("src.archiver.requests.put")
+    def test_retries_on_429_then_succeeds(self, mock_put, mock_sleep):
+        mock_put.side_effect = [_rate_limit_response(), _ok_response()]
+        result = archive_card(CARD_ID, CARD_NAME)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(mock_put.call_count, 2)
+        mock_sleep.assert_called_once_with(1)  # 2^0 = 1
+
+    @patch("src.archiver.time.sleep")
+    @patch("src.archiver.requests.put")
+    def test_all_attempts_rate_limited_returns_failure(self, mock_put, mock_sleep):
+        mock_put.return_value = _rate_limit_response()
+        result = archive_card(CARD_ID, CARD_NAME, max_retries=3)
+
+        self.assertFalse(result["success"])
+        self.assertIn("Rate limited", result["message"])
+        self.assertEqual(mock_put.call_count, 3)
+        self.assertEqual(mock_sleep.call_count, 2)  # sleep after attempt 0 and 1, not 2
+
+    @patch("src.archiver.time.sleep")
+    @patch("src.archiver.requests.put")
+    def test_backoff_increases_exponentially(self, mock_put, mock_sleep):
+        mock_put.side_effect = [
+            _rate_limit_response(),
+            _rate_limit_response(),
+            _ok_response(),
+        ]
+        archive_card(CARD_ID, CARD_NAME, max_retries=3)
+
+        sleep_calls = [c[0][0] for c in mock_sleep.call_args_list]
+        self.assertEqual(sleep_calls, [1, 2])  # 2^0, 2^1
 
 
 if __name__ == "__main__":
