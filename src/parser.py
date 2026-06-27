@@ -52,11 +52,23 @@ def _frontmatter(card, list_name, date_str):
     if list_name == "incoming":
         return f"---\ndate: {date_str}\nsource: trello\nsource_url: {url}\ntags:\n  - inbox\n---"
     if list_name == "research":
+        research_url = _extract_url(card)
+        url_line = f"research_url: {research_url}\n" if research_url else ""
         return (
             f"---\nname: {name}\nsource_url: {url}\ndate: {date_str}\n"
-            f"tags:\n  - research\nresearch_status: pending\n---"
+            f"{url_line}tags:\n  - research\nresearch_status: pending\n---"
         )
     raise ValueError(f"Unknown list_name: {list_name}")
+
+
+def _extract_url(card):
+    """Return the first non-Trello URL from desc or attachments, or None."""
+    for text in [card.get("desc", ""), *[a["url"] for a in card.get("attachments", [])]]:
+        for match in re.finditer(r'https?://[^\s\)\]"]+', text):
+            u = match.group(0).rstrip(".,")
+            if "trello.com" not in u:
+                return u
+    return None
 
 
 def _body(card):
