@@ -18,7 +18,7 @@ REQUIRED = [
 
 missing = [v for v in REQUIRED if not os.getenv(v)]
 if missing:
-    print("❌ Missing required env vars:")
+    print("[ERROR] Missing required env vars:")
     for v in missing:
         print(f"   - {v}")
     sys.exit(1)
