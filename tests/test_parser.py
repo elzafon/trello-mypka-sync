@@ -103,6 +103,46 @@ class TestParseCard(unittest.TestCase):
         _, fm, _ = parse_card(card)
         self.assertIn("date: 2026-01-15", fm)
 
+    def test_research_path_in_topics_folder(self):
+        card = self._card(list_name="research")
+        path, _, _ = parse_card(card)
+        norm = path.replace("\\", "/")
+        self.assertIn("PKM/My Life/Topics", norm)
+        self.assertIn("my-test-card.md", norm)
+
+    def test_research_frontmatter_has_status_and_tag(self):
+        card = self._card(list_name="research")
+        _, fm, _ = parse_card(card)
+        self.assertIn("research_status: pending", fm)
+        self.assertIn("tags:", fm)
+        self.assertIn("  - research", fm)
+        self.assertIn("name: My Test Card", fm)
+
+    def test_research_body_appends_pax_section(self):
+        card = self._card(list_name="research", desc="Some context")
+        _, _, body = parse_card(card)
+        self.assertIn("Some context", body)
+        self.assertIn("## Pax Research", body)
+        self.assertIn("_Pending..._", body)
+        self.assertGreater(body.index("## Pax Research"), body.index("Some context"))
+
+    def test_research_body_no_desc_starts_with_pax_section(self):
+        card = self._card(list_name="research", desc="", attachments=[])
+        _, _, body = parse_card(card)
+        self.assertTrue(body.startswith("## Pax Research"))
+        self.assertIn("_Pending..._", body)
+
+    def test_research_body_with_attachments_pax_section_last(self):
+        card = self._card(
+            list_name="research",
+            desc="",
+            attachments=[{"name": "Ref", "url": "https://example.com"}],
+        )
+        _, _, body = parse_card(card)
+        self.assertIn("## References", body)
+        self.assertIn("## Pax Research", body)
+        self.assertGreater(body.index("## Pax Research"), body.index("## References"))
+
 
 if __name__ == "__main__":
     unittest.main()

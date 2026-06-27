@@ -35,6 +35,9 @@ TRELLO_LISTS = {
     "incoming": os.getenv("TRELLO_LIST_INCOMING"),
 }
 
+if os.getenv("TRELLO_LIST_RESEARCH"):
+    TRELLO_LISTS["research"] = os.getenv("TRELLO_LIST_RESEARCH")
+
 PKA_REPO_PATH = os.getenv("PKA_REPO_PATH")
 
 TRELLO_AUTH = {"key": TRELLO_API_KEY, "token": TRELLO_TOKEN}

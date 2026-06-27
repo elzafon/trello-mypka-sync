@@ -9,6 +9,7 @@ LIST_FOLDER_MAP = {
     "goals":    "PKM/My Life/Goals",
     "crm":      "PKM/CRM/People",
     "incoming": "PKM/Journal",
+    "research": "PKM/My Life/Topics",
 }
 
 
@@ -50,6 +51,11 @@ def _frontmatter(card, list_name, date_str):
         return f"---\nfull_name: {name}\nsource_url: {url}\ndate: {date_str}\n---"
     if list_name == "incoming":
         return f"---\ndate: {date_str}\nsource: trello\nsource_url: {url}\ntags:\n  - inbox\n---"
+    if list_name == "research":
+        return (
+            f"---\nname: {name}\nsource_url: {url}\ndate: {date_str}\n"
+            f"tags:\n  - research\nresearch_status: pending\n---"
+        )
     raise ValueError(f"Unknown list_name: {list_name}")
 
 
@@ -78,4 +84,8 @@ def parse_card(card):
         folder = os.path.join(PKA_REPO_PATH, base)
         filename = f"{slugify(card['name'])}.md"
 
-    return unique_path(folder, filename), _frontmatter(card, list_name, date_str), _body(card)
+    body = _body(card)
+    if list_name == "research":
+        suffix = "## Pax Research\n\n_Pending..._"
+        body = f"{body}\n\n{suffix}" if body else suffix
+    return unique_path(folder, filename), _frontmatter(card, list_name, date_str), body
