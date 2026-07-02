@@ -52,11 +52,10 @@ def _frontmatter(card, list_name, date_str):
     if list_name == "incoming":
         return f"---\ndate: {date_str}\nsource: trello\nsource_url: {url}\ntags:\n  - inbox\n---"
     if list_name == "research":
-        research_url = _extract_url(card)
-        url_line = f"research_url: {research_url}\n" if research_url else ""
+        source_url = _extract_url(card) or url
         return (
-            f"---\nname: {name}\nsource_url: {url}\ndate: {date_str}\n"
-            f"{url_line}tags:\n  - research\nresearch_status: pending\n---"
+            f"---\nname: {name}\nsource_url: {source_url}\ndate: {date_str}\n"
+            f"tags:\n  - research\nresearch_status: pending\n---"
         )
     raise ValueError(f"Unknown list_name: {list_name}")
 
