@@ -1,6 +1,7 @@
 import sys
 import os
 import unittest
+import yaml
 from pathlib import PurePosixPath
 from unittest.mock import MagicMock, patch
 
@@ -142,6 +143,135 @@ class TestParseCard(unittest.TestCase):
         self.assertIn("## References", body)
         self.assertIn("## Pax Research", body)
         self.assertGreater(body.index("## Pax Research"), body.index("## References"))
+
+
+class TestResearchModeAndUrl(unittest.TestCase):
+    """Regression tests for the source_url/research_url mismatch bug (2026-07-02):
+    source_url must always stay the Trello permalink (origin tracking); a real
+    fetch target only ever lands in research_url, and only when the card is
+    confidently "just a link", never when a URL is merely mentioned in passing
+    inside a longer pasted body."""
+
+    def _card(self, **kwargs):
+        return {**BASE_CARD, **kwargs}
+
+    def test_source_url_is_always_trello_permalink(self):
+        card = self._card(
+            list_name="research",
+            name="https://github.com/org/repo",
+            desc="",
+        )
+        _, fm, _ = parse_card(card)
+        self.assertIn(f"source_url: {BASE_CARD['url']}", fm)
+
+    def test_sole_short_link_sets_fetch_mode_and_research_url(self):
+        card = self._card(
+            list_name="research",
+            name="https://github.com/org/repo check this out",
+            desc="[https://github.com/org/repo](https://github.com/org/repo)\n\nworth implementing?",
+        )
+        _, fm, _ = parse_card(card)
+        self.assertIn("research_mode: fetch", fm)
+        self.assertIn("research_url: https://github.com/org/repo", fm)
+
+    def test_url_mentioned_in_passing_sets_body_mode_no_research_url(self):
+        long_text = " ".join(["filler word"] * 100)
+        card = self._card(
+            list_name="research",
+            name="check these prompts and comment",
+            desc=f"{long_text} I feed the outputs into Ranked AI. http://www.Ranked.ai does the rest. {long_text}",
+        )
+        _, fm, _ = parse_card(card)
+        self.assertIn("research_mode: body", fm)
+        self.assertNotIn("research_url:", fm)
+
+    def test_url_in_bare_name_no_desc_sets_fetch_mode(self):
+        card = self._card(
+            list_name="research",
+            name="https://github.com/msitarzewski/agency-agents",
+            desc="",
+            attachments=[],
+        )
+        _, fm, _ = parse_card(card)
+        self.assertIn("research_mode: fetch", fm)
+        self.assertIn("research_url: https://github.com/msitarzewski/agency-agents", fm)
+
+    def test_no_url_anywhere_sets_body_mode(self):
+        card = self._card(list_name="research", name="think about this", desc="no links here")
+        _, fm, _ = parse_card(card)
+        self.assertIn("research_mode: body", fm)
+        self.assertNotIn("research_url:", fm)
+
+    def test_multiple_urls_sets_body_mode(self):
+        card = self._card(
+            list_name="research",
+            desc="compare https://a.example.com and https://b.example.com",
+        )
+        _, fm, _ = parse_card(card)
+        self.assertIn("research_mode: body", fm)
+        self.assertNotIn("research_url:", fm)
+
+    def test_explicit_fetch_label_overrides_heuristic(self):
+        long_text = " ".join(["filler"] * 100)
+        card = self._card(
+            list_name="research",
+            labels=["research-fetch"],
+            desc=f"{long_text} https://example.com/article {long_text}",
+        )
+        _, fm, _ = parse_card(card)
+        self.assertIn("research_mode: fetch", fm)
+        self.assertIn("research_url: https://example.com/article", fm)
+
+    def test_explicit_body_label_overrides_heuristic(self):
+        card = self._card(
+            list_name="research",
+            labels=["research-body"],
+            desc="https://example.com/short",
+        )
+        _, fm, _ = parse_card(card)
+        self.assertIn("research_mode: body", fm)
+        self.assertNotIn("research_url:", fm)
+
+
+class TestFrontmatterYamlSafety(unittest.TestCase):
+    """Regression tests for a second bug found while fixing the first:
+    a card name ending in a colon (e.g. Trello title "...and comment:")
+    produced invalid YAML via naive f-string interpolation, silently
+    excluding that file from every future frontmatter.load() scan (pax-vm's
+    pending-file scanner logs a warning and skips unparsable files)."""
+
+    def _card(self, **kwargs):
+        return {**BASE_CARD, **kwargs}
+
+    def _parsed_frontmatter(self, card):
+        _, fm, _ = parse_card(card)
+        yaml_body = fm.strip().strip("-").strip()
+        return yaml.safe_load(yaml_body)
+
+    def test_name_with_trailing_colon_round_trips(self):
+        card = self._card(list_name="topics", name="check these prompts list and comment:")
+        data = self._parsed_frontmatter(card)
+        self.assertEqual(data["name"], "check these prompts list and comment:")
+
+    def test_name_with_quotes_round_trips(self):
+        card = self._card(list_name="topics", name='A card called "quoted" title')
+        data = self._parsed_frontmatter(card)
+        self.assertEqual(data["name"], 'A card called "quoted" title')
+
+    def test_unicode_name_round_trips(self):
+        card = self._card(list_name="topics", name="מנקה חלון רובוטי")
+        data = self._parsed_frontmatter(card)
+        self.assertEqual(data["name"], "מנקה חלון רובוטי")
+
+    def test_research_card_with_colon_name_is_valid_yaml(self):
+        card = self._card(
+            list_name="research",
+            name="check these prompts list and comment:",
+            desc="1. Prompt one\n2. Prompt two",
+        )
+        data = self._parsed_frontmatter(card)
+        self.assertEqual(data["name"], "check these prompts list and comment:")
+        self.assertEqual(data["research_status"], "pending")
 
 
 if __name__ == "__main__":
