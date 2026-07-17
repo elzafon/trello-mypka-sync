@@ -41,3 +41,10 @@ if os.getenv("TRELLO_LIST_RESEARCH"):
 PKA_REPO_PATH = os.getenv("PKA_REPO_PATH")
 
 TRELLO_AUTH = {"key": TRELLO_API_KEY, "token": TRELLO_TOKEN}
+
+# Optional — repeat-failure guardrail alerting (src/guardrail.py +
+# src/notifier.py). Not in REQUIRED: if unset, notifier.alert() logs a
+# warning and no-ops instead of crashing the sync run. Same bot/chat as
+# pax-vm's alerts (see ~/pax-vm/.env) so alerts land in one place.
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")

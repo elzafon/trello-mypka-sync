@@ -7,7 +7,7 @@ _mock_config = MagicMock()
 _mock_config.PKA_REPO_PATH = "/fake/pka"
 sys.modules["src.config"] = _mock_config
 
-from src.git_push import push_cards  # noqa: E402
+from src.git_push import push_cards, pull_rebase  # noqa: E402
 
 REPO = "/fake/pka"
 FILES = ["/fake/pka/PKM/My Life/Topics/foo.md"]
@@ -28,6 +28,24 @@ def _fail(stdout="", stderr="error msg"):
     r.stdout = stdout
     r.stderr = stderr
     return r
+
+
+class TestPullRebase(unittest.TestCase):
+
+    @patch("src.git_push.subprocess.run")
+    def test_success(self, mock_run):
+        mock_run.return_value = _ok(stdout="Already up to date.")
+        result = pull_rebase()
+        self.assertTrue(result["success"])
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd, ["git", "-C", REPO, "pull", "--rebase"])
+
+    @patch("src.git_push.subprocess.run")
+    def test_failure(self, mock_run):
+        mock_run.return_value = _fail(stderr="CONFLICT: rebase failed")
+        result = pull_rebase()
+        self.assertFalse(result["success"])
+        self.assertIn("git pull --rebase failed", result["message"])
 
 
 class TestPushCards(unittest.TestCase):
@@ -77,13 +95,52 @@ class TestPushCards(unittest.TestCase):
         self.assertEqual(mock_run.call_count, 2)
 
     @patch("src.git_push.subprocess.run")
-    def test_git_push_failure_after_commit(self, mock_run):
-        mock_run.side_effect = [_ok(), _ok(), _fail(stderr="remote: permission denied")]
+    def test_push_failure_recovers_after_rebase_retry(self, mock_run):
+        # add ok, commit ok, push fails (non-fast-forward), rebase ok, retry push ok
+        mock_run.side_effect = [
+            _ok(), _ok(),
+            _fail(stderr="! [rejected] main -> main (non-fast-forward)"),
+            _ok(stdout="Successfully rebased"),
+            _ok(),
+        ]
+        result = push_cards(FILES, NAMES)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["committed_files"], FILES)
+        self.assertEqual(mock_run.call_count, 5)
+        self.assertIn("pull", mock_run.call_args_list[3][0][0])
+        self.assertIn("push", mock_run.call_args_list[4][0][0])
+
+    @patch("src.git_push.subprocess.run")
+    def test_push_failure_persists_when_rebase_also_fails(self, mock_run):
+        # add ok, commit ok, push fails, rebase fails too -> no second push attempt
+        mock_run.side_effect = [
+            _ok(), _ok(),
+            _fail(stderr="! [rejected] main -> main (non-fast-forward)"),
+            _fail(stderr="CONFLICT: rebase failed"),
+        ]
         result = push_cards(FILES, NAMES)
 
         self.assertFalse(result["success"])
         self.assertIn("git push failed", result["message"])
         self.assertEqual(result["committed_files"], FILES)
+        self.assertEqual(mock_run.call_count, 4)
+
+    @patch("src.git_push.subprocess.run")
+    def test_push_failure_persists_when_retry_push_also_fails(self, mock_run):
+        # add ok, commit ok, push fails, rebase ok, retry push fails too
+        mock_run.side_effect = [
+            _ok(), _ok(),
+            _fail(stderr="! [rejected] main -> main (non-fast-forward)"),
+            _ok(stdout="Successfully rebased"),
+            _fail(stderr="! [rejected] main -> main (non-fast-forward) again"),
+        ]
+        result = push_cards(FILES, NAMES)
+
+        self.assertFalse(result["success"])
+        self.assertIn("git push failed", result["message"])
+        self.assertEqual(result["committed_files"], FILES)
+        self.assertEqual(mock_run.call_count, 5)
 
     @patch("src.git_push.subprocess.run")
     def test_commit_message_truncates_long_card_list(self, mock_run):
