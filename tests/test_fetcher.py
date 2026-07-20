@@ -61,6 +61,58 @@ class TestFetchCards(unittest.TestCase):
         self.assertEqual(cards[0]["attachments"], [])
 
     @patch("src.fetcher.requests.get")
+    def test_normalizes_checklists_with_state(self, mock_get):
+        card = {**SAMPLE_CARD, "checklists": [
+            {"name": "Steps", "pos": 1, "checkItems": [
+                {"name": "one", "state": "complete", "pos": 1},
+                {"name": "two", "state": "incomplete", "pos": 2},
+            ]},
+        ]}
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = [card]
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+
+        cards = fetch_cards()
+        self.assertEqual(cards[0]["checklists"], [
+            {"name": "Steps", "items": [
+                {"name": "one", "checked": True},
+                {"name": "two", "checked": False},
+            ]},
+        ])
+
+    @patch("src.fetcher.requests.get")
+    def test_checklist_items_sorted_by_pos(self, mock_get):
+        card = {**SAMPLE_CARD, "checklists": [
+            {"name": "Steps", "pos": 2, "checkItems": [
+                {"name": "second", "state": "incomplete", "pos": 20},
+                {"name": "first", "state": "incomplete", "pos": 10},
+            ]},
+            {"name": "Earlier list", "pos": 1, "checkItems": []},
+        ]}
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = [card]
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+
+        cards = fetch_cards()
+        checklists = cards[0]["checklists"]
+        self.assertEqual([c["name"] for c in checklists], ["Earlier list", "Steps"])
+        self.assertEqual(
+            [i["name"] for i in checklists[1]["items"]], ["first", "second"]
+        )
+
+    @patch("src.fetcher.requests.get")
+    def test_card_without_checklists_yields_empty_list(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = [SAMPLE_CARD]
+        mock_resp.raise_for_status.return_value = None
+        mock_get.return_value = mock_resp
+
+        cards = fetch_cards()
+        self.assertEqual(cards[0]["checklists"], [])
+
+    @patch("src.fetcher.requests.get")
     def test_empty_list_returns_no_cards(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.json.return_value = []

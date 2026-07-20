@@ -148,10 +148,35 @@ def _research_mode_and_url(card):
     return "body", None
 
 
+def _checklists(card):
+    """Render a card's Trello Checklists as markdown task-list sections.
+
+    Each checklist becomes a section headed by its name; each item becomes a
+    GitHub-style task-list line — `- [x] item` when the item is complete on the
+    card, `- [ ] item` when it is not — preserving the subtask structure written
+    on the card. Empty checklists (no items) are skipped so they leave no
+    dangling heading. Returns a list of section strings (one per non-empty
+    checklist); [] when the card has no checklists.
+    """
+    sections = []
+    for checklist in card.get("checklists", []):
+        items = checklist.get("items", [])
+        if not items:
+            continue
+        name = checklist.get("name") or "Checklist"
+        lines = "\n".join(
+            f"- [{'x' if item.get('checked') else ' '}] {item.get('name', '')}"
+            for item in items
+        )
+        sections.append(f"## {name}\n\n{lines}")
+    return sections
+
+
 def _body(card):
     parts = []
     if card.get("desc", "").strip():
         parts.append(card["desc"].strip())
+    parts.extend(_checklists(card))
     if card.get("attachments"):
         refs = "\n".join(f"- [{a['name'] or a['url']}]({a['url']})" for a in card["attachments"])
         parts.append(f"## References\n\n{refs}")

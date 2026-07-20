@@ -15,6 +15,8 @@ def fetch_cards():
                 "fields": "name,desc,url,dateLastActivity,labels",
                 "attachments": "true",
                 "attachment_fields": "name,url",
+                "checklists": "all",
+                "checklist_fields": "name,pos",
             },
         )
         resp.raise_for_status()
@@ -29,6 +31,25 @@ def fetch_cards():
                     {"name": a.get("name", ""), "url": a["url"]}
                     for a in card.get("attachments", [])
                     if a.get("url")
+                ],
+                "checklists": [
+                    {
+                        "name": cl.get("name", ""),
+                        "items": [
+                            {
+                                "name": ci.get("name", ""),
+                                "checked": ci.get("state") == "complete",
+                            }
+                            for ci in sorted(
+                                cl.get("checkItems", []),
+                                key=lambda c: c.get("pos", 0),
+                            )
+                        ],
+                    }
+                    for cl in sorted(
+                        card.get("checklists", []),
+                        key=lambda c: c.get("pos", 0),
+                    )
                 ],
                 "url": card["url"],
                 "date_modified": card["dateLastActivity"],

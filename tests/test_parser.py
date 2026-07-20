@@ -274,5 +274,118 @@ class TestFrontmatterYamlSafety(unittest.TestCase):
         self.assertEqual(data["research_status"], "pending")
 
 
+class TestChecklists(unittest.TestCase):
+    """Trello card Checklists render as markdown task-list checkboxes in the
+    note body (decided 2026-07-19, project trello-mypka-sync): `- [ ] item`
+    for an incomplete item, `- [x] item` for a complete one, preserving the
+    subtask structure written on the card."""
+
+    def _card(self, **kwargs):
+        return {**BASE_CARD, **kwargs}
+
+    def test_incomplete_items_render_as_empty_checkboxes(self):
+        card = self._card(
+            list_name="topics",
+            desc="",
+            checklists=[{"name": "Steps", "items": [
+                {"name": "First step", "checked": False},
+                {"name": "Second step", "checked": False},
+            ]}],
+        )
+        _, _, body = parse_card(card)
+        self.assertIn("- [ ] First step", body)
+        self.assertIn("- [ ] Second step", body)
+
+    def test_mixed_complete_and_incomplete_items(self):
+        card = self._card(
+            list_name="topics",
+            desc="",
+            checklists=[{"name": "Steps", "items": [
+                {"name": "Done thing", "checked": True},
+                {"name": "Todo thing", "checked": False},
+            ]}],
+        )
+        _, _, body = parse_card(card)
+        self.assertIn("- [x] Done thing", body)
+        self.assertIn("- [ ] Todo thing", body)
+
+    def test_checklist_name_becomes_heading(self):
+        card = self._card(
+            list_name="topics",
+            desc="",
+            checklists=[{"name": "My Checklist", "items": [
+                {"name": "a", "checked": False},
+            ]}],
+        )
+        _, _, body = parse_card(card)
+        self.assertIn("## My Checklist", body)
+
+    def test_unnamed_checklist_falls_back_to_generic_heading(self):
+        card = self._card(
+            list_name="topics",
+            desc="",
+            checklists=[{"name": "", "items": [{"name": "a", "checked": False}]}],
+        )
+        _, _, body = parse_card(card)
+        self.assertIn("## Checklist", body)
+
+    def test_no_checklist_key_produces_no_checkboxes(self):
+        card = self._card(list_name="topics", desc="Just text")
+        _, _, body = parse_card(card)
+        self.assertNotIn("- [ ]", body)
+        self.assertNotIn("- [x]", body)
+        self.assertEqual(body, "Just text")
+
+    def test_empty_checklist_is_skipped(self):
+        card = self._card(
+            list_name="topics",
+            desc="Body text",
+            checklists=[{"name": "Empty", "items": []}],
+        )
+        _, _, body = parse_card(card)
+        self.assertNotIn("## Empty", body)
+        self.assertEqual(body, "Body text")
+
+    def test_checklist_sits_after_desc_before_references(self):
+        card = self._card(
+            list_name="topics",
+            desc="Description here",
+            checklists=[{"name": "Steps", "items": [
+                {"name": "step one", "checked": False},
+            ]}],
+            attachments=[{"name": "Ref", "url": "https://example.com"}],
+        )
+        _, _, body = parse_card(card)
+        self.assertLess(body.index("Description here"), body.index("- [ ] step one"))
+        self.assertLess(body.index("- [ ] step one"), body.index("## References"))
+
+    def test_multiple_checklists_all_rendered(self):
+        card = self._card(
+            list_name="topics",
+            desc="",
+            checklists=[
+                {"name": "List A", "items": [{"name": "a1", "checked": True}]},
+                {"name": "List B", "items": [{"name": "b1", "checked": False}]},
+            ],
+        )
+        _, _, body = parse_card(card)
+        self.assertIn("## List A", body)
+        self.assertIn("- [x] a1", body)
+        self.assertIn("## List B", body)
+        self.assertIn("- [ ] b1", body)
+
+    def test_checklist_on_research_card_precedes_pax_section(self):
+        card = self._card(
+            list_name="research",
+            desc="",
+            checklists=[{"name": "Steps", "items": [
+                {"name": "do x", "checked": False},
+            ]}],
+        )
+        _, _, body = parse_card(card)
+        self.assertIn("- [ ] do x", body)
+        self.assertLess(body.index("- [ ] do x"), body.index("## Pax Research"))
+
+
 if __name__ == "__main__":
     unittest.main()
