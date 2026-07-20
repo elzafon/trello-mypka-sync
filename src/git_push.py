@@ -1,4 +1,7 @@
-import fcntl
+try:
+    import fcntl
+except ImportError:  # non-POSIX (Windows dev/CI) — lock degrades to no-op
+    fcntl = None
 import os
 import subprocess
 import sys
@@ -35,6 +38,11 @@ class _PkaWriterLock:
         self._fd = None
 
     def __enter__(self):
+        if fcntl is None:
+            # non-POSIX (Windows dev/CI): no flock available. The writer race
+            # only exists on the Linux VM, so skip locking cleanly here.
+            self._fd = None
+            return self
         try:
             self._fd = os.open(self._path, os.O_CREAT | os.O_RDWR, 0o644)
         except OSError as exc:
