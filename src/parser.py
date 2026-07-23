@@ -12,7 +12,19 @@ LIST_FOLDER_MAP = {
     "crm":      "PKM/CRM/People",
     "incoming": "Team Inbox",
     "journal":  "PKM/Journal",
-    "research": "PKM/My Life/Topics",
+    # CHANGED 2026-07-23 per Shalom. `research` used to write into
+    # "PKM/My Life/Topics" stamped `research_status: pending`, waiting for the
+    # pax-vm job to complete it. That job was frozen and its cron disabled the
+    # same day, so those notes would have sat `pending` forever with no consumer
+    # — a status nobody maintains. Research now stages in Team Inbox/ like any
+    # other capture and is processed by a human via /process-inbox.
+    #     "research": "PKM/My Life/Topics",   <- original, disabled 2026-07-23
+    #
+    # NOTE: do NOT comment this key out to disable the route. parse_card() does
+    # LIST_FOLDER_MAP[list_name] and _frontmatter() raises on an unknown list, so
+    # a missing key makes the card raise, never be written, and never be archived
+    # — it would silently re-fail every run forever.
+    "research": "Team Inbox",
 }
 
 # --- Incoming vs Journal: staging area vs knowledge base ------------------
@@ -122,10 +134,20 @@ def _frontmatter(card, list_name, date_str):
     if list_name == "research":
         mode, research_url = _research_mode_and_url(card)
         research_url_line = f"research_url: {_yaml_scalar(research_url)}\n" if research_url else ""
+        # DISABLED 2026-07-23 per Shalom. `research_status: pending` existed only
+        # so the pax-vm job could flip it to `done`. That job is frozen and its
+        # cron is off, so the field had no consumer left — and a status nobody
+        # maintains is worse than no status at all (it reads as "in progress"
+        # forever). Dropped rather than re-pointed.
+        #     f"tags:\n  - research\nresearch_status: pending\n---"   <- original
+        #
+        # `research_mode` and `research_url` are kept deliberately: they describe
+        # the card itself (is the URL the point of it, or just mentioned in
+        # passing?) and are useful to whoever does the research by hand.
         return (
             f"---\nname: {name}\nsource_url: {url}\ndate: {date_str}\n"
             f"{research_url_line}research_mode: {mode}\n"
-            f"tags:\n  - research\nresearch_status: pending\n---"
+            f"tags:\n  - research\n---"
         )
     raise ValueError(f"Unknown list_name: {list_name}")
 
@@ -223,10 +245,12 @@ def parse_card(card):
         yyyy, mm = date_str[:4], date_str[5:7]
         folder = os.path.join(PKA_REPO_PATH, base, yyyy, mm)
         filename = f"{date_str}-{slugify(card['name'])}.md"
-    elif list_name == "incoming":
+    elif list_name in ("incoming", "research"):
         # Team Inbox stays FLAT — no YYYY/MM. The whole point is that you can
         # see at a glance whether it's empty; nested folders hide leftovers.
         # Filename keeps the date prefix so staged captures sort by capture day.
+        # `research` joined this branch 2026-07-23 when it was rerouted from
+        # PKM/My Life/Topics to Team Inbox/ — it stages like any other capture.
         folder = os.path.join(PKA_REPO_PATH, base)
         filename = f"{date_str}-{slugify(card['name'])}.md"
     else:
@@ -234,7 +258,12 @@ def parse_card(card):
         filename = f"{slugify(card['name'])}.md"
 
     body = _body(card)
-    if list_name == "research":
-        suffix = "## Pax Research\n\n_Pending..._"
-        body = f"{body}\n\n{suffix}" if body else suffix
+    # DISABLED 2026-07-23, same reason as `research_status`. This stamped a
+    # "## Pax Research / _Pending..._" section into every research note for the
+    # pax-vm job to fill in. With that job frozen, the section is a promise
+    # nothing will keep — and in Team Inbox/ it would read during /process-inbox
+    # as "research is queued" when nothing is coming.
+    #     if list_name == "research":
+    #         suffix = "## Pax Research\n\n_Pending..._"
+    #         body = f"{body}\n\n{suffix}" if body else suffix
     return unique_path(folder, filename), _frontmatter(card, list_name, date_str), body

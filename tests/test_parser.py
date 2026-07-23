@@ -117,36 +117,42 @@ class TestParseCard(unittest.TestCase):
         _, fm, _ = parse_card(card)
         self.assertIn("date: 2026-01-15", fm)
 
-    def test_research_path_in_topics_folder(self):
+    # Rerouted 2026-07-23: research stages in Team Inbox/ instead of writing
+    # into PKM/My Life/Topics, because the pax-vm job that was meant to complete
+    # those notes is frozen. See parser.LIST_FOLDER_MAP.
+    def test_research_path_in_team_inbox_flat(self):
         card = self._card(list_name="research")
         path, _, _ = parse_card(card)
         norm = path.replace("\\", "/")
-        self.assertIn("PKM/My Life/Topics", norm)
-        self.assertIn("my-test-card.md", norm)
+        self.assertIn("Team Inbox", norm)
+        self.assertNotIn("PKM/My Life/Topics", norm)
+        # Flat — no YYYY/MM nesting — and date-prefixed like `incoming`.
+        # BASE_CARD.date_modified is 2026-06-27.
+        self.assertIn("2026-06-27-my-test-card.md", norm)
+        self.assertNotIn("Team Inbox/2026/", norm)
 
-    def test_research_frontmatter_has_status_and_tag(self):
+    def test_research_frontmatter_has_tag_and_no_status(self):
         card = self._card(list_name="research")
         _, fm, _ = parse_card(card)
-        self.assertIn("research_status: pending", fm)
+        # research_status had exactly one consumer (pax-vm) and it is disabled.
+        self.assertNotIn("research_status", fm)
         self.assertIn("tags:", fm)
         self.assertIn("  - research", fm)
         self.assertIn("name: My Test Card", fm)
 
-    def test_research_body_appends_pax_section(self):
+    def test_research_body_has_no_pax_section(self):
         card = self._card(list_name="research", desc="Some context")
         _, _, body = parse_card(card)
         self.assertIn("Some context", body)
-        self.assertIn("## Pax Research", body)
-        self.assertIn("_Pending..._", body)
-        self.assertGreater(body.index("## Pax Research"), body.index("Some context"))
+        self.assertNotIn("## Pax Research", body)
+        self.assertNotIn("_Pending..._", body)
 
-    def test_research_body_no_desc_starts_with_pax_section(self):
+    def test_research_body_empty_when_no_desc_no_attachments(self):
         card = self._card(list_name="research", desc="", attachments=[])
         _, _, body = parse_card(card)
-        self.assertTrue(body.startswith("## Pax Research"))
-        self.assertIn("_Pending..._", body)
+        self.assertEqual(body, "")
 
-    def test_research_body_with_attachments_pax_section_last(self):
+    def test_research_body_with_attachments_ends_at_references(self):
         card = self._card(
             list_name="research",
             desc="",
@@ -154,8 +160,7 @@ class TestParseCard(unittest.TestCase):
         )
         _, _, body = parse_card(card)
         self.assertIn("## References", body)
-        self.assertIn("## Pax Research", body)
-        self.assertGreater(body.index("## Pax Research"), body.index("## References"))
+        self.assertNotIn("## Pax Research", body)
 
 
 class TestResearchModeAndUrl(unittest.TestCase):
@@ -284,7 +289,10 @@ class TestFrontmatterYamlSafety(unittest.TestCase):
         )
         data = self._parsed_frontmatter(card)
         self.assertEqual(data["name"], "check these prompts list and comment:")
-        self.assertEqual(data["research_status"], "pending")
+        # research_status dropped 2026-07-23 — its only consumer (pax-vm) is off.
+        # The YAML-safety regression this test guards is the colon in the name.
+        self.assertNotIn("research_status", data)
+        self.assertEqual(data["research_mode"], "body")
 
 
 class TestChecklists(unittest.TestCase):
@@ -387,7 +395,9 @@ class TestChecklists(unittest.TestCase):
         self.assertIn("## List B", body)
         self.assertIn("- [ ] b1", body)
 
-    def test_checklist_on_research_card_precedes_pax_section(self):
+    def test_checklist_on_research_card_renders_without_pax_section(self):
+        # The Pax Research placeholder was removed 2026-07-23 along with
+        # research_status; checklists must still render on a research card.
         card = self._card(
             list_name="research",
             desc="",
@@ -396,8 +406,9 @@ class TestChecklists(unittest.TestCase):
             ]}],
         )
         _, _, body = parse_card(card)
+        self.assertIn("## Steps", body)
         self.assertIn("- [ ] do x", body)
-        self.assertLess(body.index("- [ ] do x"), body.index("## Pax Research"))
+        self.assertNotIn("## Pax Research", body)
 
 
 if __name__ == "__main__":
