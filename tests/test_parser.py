@@ -74,14 +74,27 @@ class TestParseCard(unittest.TestCase):
         # ensure bare "name:" key is absent (full_name is the only name field)
         self.assertNotIn("\nname:", fm)
 
-    def test_incoming_path_includes_year_month(self):
+    def test_incoming_stages_flat_in_team_inbox(self):
+        # incoming is a STAGING area (WS-005 Stream B), not the knowledge base.
+        # Flat on purpose: no YYYY/MM, so "is the inbox empty?" stays
+        # answerable at a glance.
         card = self._card(list_name="incoming")
+        path, fm, _ = parse_card(card)
+        norm = path.replace("\\", "/")
+        self.assertIn("Team Inbox/2026-06-27-my-test-card.md", norm)
+        self.assertNotIn("PKM/Journal", norm)
+        self.assertNotIn("2026/06", norm)
+        self.assertIn("source: trello", fm)
+        self.assertIn("- inbox", fm)
+
+    def test_journal_path_includes_year_month(self):
+        card = self._card(list_name="journal")
         path, fm, _ = parse_card(card)
         norm = path.replace("\\", "/")
         self.assertIn("PKM/Journal/2026/06", norm)
         self.assertIn("2026-06-27-my-test-card.md", norm)
         self.assertIn("source: trello", fm)
-        self.assertIn("- inbox", fm)
+        self.assertIn("- journal", fm)
 
     def test_body_with_desc_and_attachments(self):
         card = self._card(

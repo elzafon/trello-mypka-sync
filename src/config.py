@@ -38,6 +38,14 @@ TRELLO_LISTS = {
 if os.getenv("TRELLO_LIST_RESEARCH"):
     TRELLO_LISTS["research"] = os.getenv("TRELLO_LIST_RESEARCH")
 
+# Optional — the `Journal` list (real day entries -> PKM/Journal/YYYY/MM/).
+# Deliberately NOT in REQUIRED: `incoming` now routes to Team Inbox/ instead
+# of PKM/Journal, and this list is what restores a direct path for genuine
+# day entries. Keeping it optional means the sync keeps running unchanged
+# until the Trello list is created and its id added here.
+if os.getenv("TRELLO_LIST_JOURNAL"):
+    TRELLO_LISTS["journal"] = os.getenv("TRELLO_LIST_JOURNAL")
+
 PKA_REPO_PATH = os.getenv("PKA_REPO_PATH")
 
 TRELLO_AUTH = {"key": TRELLO_API_KEY, "token": TRELLO_TOKEN}

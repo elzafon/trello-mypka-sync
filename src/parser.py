@@ -10,9 +10,36 @@ LIST_FOLDER_MAP = {
     "projects": "PKM/My Life/Projects",
     "goals":    "PKM/My Life/Goals",
     "crm":      "PKM/CRM/People",
-    "incoming": "PKM/Journal",
+    "incoming": "Team Inbox",
+    "journal":  "PKM/Journal",
     "research": "PKM/My Life/Topics",
 }
+
+# --- Incoming vs Journal: staging area vs knowledge base ------------------
+#
+# NAMING: the key `incoming` is the *internal config key*, not the Trello
+# list's display name. That list was renamed to "Team Inbox" on the board
+# 2026-07-23 to match where it now writes. Nothing breaks — lists are
+# fetched by ID (config.TRELLO_LISTS maps key -> list id), so the display
+# name is cosmetic. The key stays `incoming` deliberately: renaming it would
+# mean renaming TRELLO_LIST_INCOMING in the VM's .env in lockstep, and a
+# mismatch there trips the REQUIRED check in config.py and kills the sync.
+#
+# Changed 2026-07-23. `incoming` used to write straight into PKM/Journal,
+# which meant unclassified captures landed *inside* the knowledge base and
+# were distinguishable from real content only by a missing `processed_on`
+# stamp. The 2026-07-23 inbox pass measured the cost: of 7 cards synced via
+# `incoming`, 6 were not journal entries at all and had to be promoted out
+# into Topics.
+#
+#   incoming -> Team Inbox/          (WS-005 Stream B: staging; "processed"
+#                                     means the file LEAVES the folder)
+#   journal  -> PKM/Journal/YYYY/MM/ (a real day entry, already home)
+#
+# Routing now follows intent at capture time — which list you drop the card
+# on decides whether it stages or files. `journal` is optional in config.py
+# (same pattern as `research`), so the sync keeps running unchanged until
+# the Trello list actually exists.
 
 # --- Research list: "fetch a URL" vs "review the pasted body" -------------
 #
@@ -90,6 +117,8 @@ def _frontmatter(card, list_name, date_str):
         return f"---\nfull_name: {name}\nsource_url: {url}\ndate: {date_str}\n---"
     if list_name == "incoming":
         return f"---\ndate: {date_str}\nsource: trello\nsource_url: {url}\ntags:\n  - inbox\n---"
+    if list_name == "journal":
+        return f"---\ndate: {date_str}\nsource: trello\nsource_url: {url}\ntags:\n  - journal\n---"
     if list_name == "research":
         mode, research_url = _research_mode_and_url(card)
         research_url_line = f"research_url: {_yaml_scalar(research_url)}\n" if research_url else ""
@@ -189,11 +218,17 @@ def parse_card(card):
     date_str = _date(card["date_modified"])
     base = LIST_FOLDER_MAP[list_name]
 
-    if list_name == "incoming":
+    if list_name == "journal":
+        # Real day entries nest by YYYY/MM, per the PKM date-nesting rule.
         yyyy, mm = date_str[:4], date_str[5:7]
         folder = os.path.join(PKA_REPO_PATH, base, yyyy, mm)
-        slug = slugify(card["name"])
-        filename = f"{date_str}-{slug}.md"
+        filename = f"{date_str}-{slugify(card['name'])}.md"
+    elif list_name == "incoming":
+        # Team Inbox stays FLAT — no YYYY/MM. The whole point is that you can
+        # see at a glance whether it's empty; nested folders hide leftovers.
+        # Filename keeps the date prefix so staged captures sort by capture day.
+        folder = os.path.join(PKA_REPO_PATH, base)
+        filename = f"{date_str}-{slugify(card['name'])}.md"
     else:
         folder = os.path.join(PKA_REPO_PATH, base)
         filename = f"{slugify(card['name'])}.md"
