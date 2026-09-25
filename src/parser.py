@@ -76,11 +76,58 @@ RESEARCH_BODY_LABELS = {"research-body", "research-no-fetch", "no-fetch", "body"
 RESEARCH_SHORT_REMAINDER_CHARS = 200  # "just a link (+ short caption)" cutoff
 
 
+# --- Slug length cap (added 2026-09-25) -----------------------------------
+#
+# WHY: cards are captured by pasting, so `name` is often an entire pasted
+# paragraph, not a title. slugify() had no cap and faithfully turned a
+# 952-character Hebrew card name into a 903-character slug and a 949-character
+# target path. Windows rejected the write with the misleading `[Errno 2] No
+# such file or directory`, the note never landed, and because the write failed
+# the card was (correctly) never archived — so it re-failed on every run,
+# permanently stuck on the board. See logs/sync.log 2026-09-25T08:35:54,
+# card 6ab4c838cbb3bbb0704019af.
+#
+# WHAT WINDOWS ACTUALLY LIMITS: measured empirically on this machine
+# (Win 11, long paths not enabled) by creating real files under
+# `C:/Users/shin_/myPKM/Team Inbox/` with Hebrew names (2 bytes in UTF-8,
+# 1 code unit in UTF-16):
+#     total path 255 chars / 475 UTF-8 bytes -> OK
+#     total path 260 chars / 485 UTF-8 bytes -> FileNotFoundError
+# So the limit is the classic MAX_PATH of 260 *UTF-16 characters* (259 usable
+# + NUL), NOT UTF-8 bytes — 475 bytes passed fine. We therefore cap by
+# character count, which is what len() gives us for BMP text like Hebrew
+# and CJK.
+#
+# BUDGET at 70 chars, worst-case caller (parse_card's journal branch, the
+# deepest folder):
+#     "C:/Users/shin_/myPKM" (20) + "/PKM/Journal/2026/09/" (21)
+#     + "YYYY-MM-DD-" (11) + slug (70) + unique_path suffix "-10" (3)
+#     + ".md" (3)  =  128 chars.
+# Half the limit, leaving room for a deeper PKA_REPO_PATH on another machine.
+SLUG_MAX_CHARS = 70
+# When the hard cut lands mid-word we back up to the previous hyphen — but
+# only if that still leaves a meaningful slug. CJK names contain no spaces,
+# so they slugify into one very long hyphen-free run; backing up to a hyphen
+# 3 chars in would throw the whole title away. Below this floor, keep the
+# hard cut instead.
+_SLUG_MIN_AFTER_HYPHEN_TRIM = SLUG_MAX_CHARS // 2
+
+
 def slugify(name):
     s = name.lower()
     s = re.sub(r"[^\w\s-]", "", s)
     s = re.sub(r"[\s_]+", "-", s)
     s = re.sub(r"-+", "-", s).strip("-")
+    if len(s) > SLUG_MAX_CHARS:
+        cut = s[:SLUG_MAX_CHARS]
+        # s[SLUG_MAX_CHARS] is the first dropped character. If it is a hyphen,
+        # the cut already landed on a word boundary; otherwise trim back to
+        # the last hyphen so the slug never ends mid-word.
+        if s[SLUG_MAX_CHARS] != "-" and "-" in cut:
+            trimmed = cut[:cut.rindex("-")]
+            if len(trimmed) >= _SLUG_MIN_AFTER_HYPHEN_TRIM:
+                cut = trimmed
+        s = cut.strip("-")
     return s or "untitled"
 
 

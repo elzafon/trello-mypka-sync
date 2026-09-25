@@ -29,6 +29,24 @@ def _flag_repeat_failure(card_id, card_name, stage):
         )
 
 
+def _exit_if_write_failures(logger, failed_cards):
+    """Exit 1 if any card failed to parse/write this run.
+
+    Called at every exit path of run() that would otherwise fall through to a
+    0 exit. Cards that DID write have already been pushed and archived by the
+    time this runs, so exiting here loses nothing — it only stops the run from
+    claiming success it didn't have.
+    """
+    if not failed_cards:
+        return
+    summary = ", ".join(f'{cid} ("{name}")' for cid, name in failed_cards)
+    logger.error(
+        f"=== Sync finished with {len(failed_cards)} card(s) that failed to "
+        f"write: {summary} — exiting 1 ==="
+    )
+    sys.exit(1)
+
+
 def run():
     logger = setup_logger(LOG_PATH)
     logger.info("=== Sync started ===")
@@ -53,6 +71,14 @@ def run():
     logger.info(f"Fetched {len(cards)} card(s)")
 
     written = []
+    # Cards that raised in parse/write. A run with any of these must NOT exit 0:
+    # /sync-trello treats the exit code as the single honest signal of the run,
+    # and before 2026-09-25 a card that failed to write (e.g. an over-long
+    # filename) was logged as ERROR while the process still exited 0 — a partial
+    # failure reported as success. One bad card still does not abort the run:
+    # the others write, push and archive exactly as before; only the final exit
+    # status changes.
+    failed_cards = []
     for card in cards:
         try:
             target_path, fm, body = parse_card(card)
@@ -60,6 +86,7 @@ def run():
             written.append((card, target_path))
             log_event(logger, card["card_id"], card["name"], "write", target_path)
         except Exception as exc:
+            failed_cards.append((card.get("card_id", "?"), card.get("name", "?")))
             log_event(
                 logger, card["card_id"], card.get("name", "?"),
                 "write", str(exc), success=False,
@@ -67,6 +94,7 @@ def run():
 
     if not written:
         logger.info("No files written.")
+        _exit_if_write_failures(logger, failed_cards)
         return
 
     file_paths = [p for _, p in written]
@@ -98,6 +126,7 @@ def run():
             _flag_repeat_failure(card["card_id"], card["name"], "archive")
 
     logger.info(f"=== Sync complete: {len(written)} card(s) processed ===")
+    _exit_if_write_failures(logger, failed_cards)
 
 
 if __name__ == "__main__":

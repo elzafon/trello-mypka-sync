@@ -164,7 +164,11 @@ class TestSyncRun(unittest.TestCase):
             mock_alert.assert_called_once()
             self.assertIn("abc123", mock_alert.call_args[0][0])
 
-    def test_per_card_write_error_continues_with_others(self):
+    def test_per_card_write_error_continues_with_others_but_exits_1(self):
+        """One bad card must not abort the run — the healthy card still writes,
+        pushes and archives — but the run must NOT report success. Before
+        2026-09-25 this exited 0, so a card that failed to write (e.g. an
+        over-long filename) was a silent partial failure."""
         card2 = {**CARD, "card_id": "def456", "name": "Card 2"}
         path2 = "/fake/pka/PKM/My Life/Topics/card-2.md"
 
@@ -179,14 +183,17 @@ class TestSyncRun(unittest.TestCase):
              patch("sync.write_card", return_value=path2), \
              patch("sync.push_cards", return_value={"success": True, "committed_files": [path2], "message": "ok"}) as mock_push, \
              patch("sync.archive_card", return_value={"success": True, "card_id": "def456", "message": "Archived: Card 2"}) as mock_archive, \
-             patch("sync.record_success"), \
+             patch("sync.record_success") as mock_record_success, \
              patch("sync.setup_logger", return_value=_mock_logger()), \
              patch("sync.log_event"):
-            sync.run()
+            with self.assertRaises(SystemExit) as ctx:
+                sync.run()
+            self.assertEqual(ctx.exception.code, 1)
             mock_push.assert_called_once_with([path2], ["Card 2"])
             mock_archive.assert_called_once_with("def456", "Card 2")
+            mock_record_success.assert_called_once_with("def456")
 
-    def test_all_cards_fail_to_write_skips_push(self):
+    def test_all_cards_fail_to_write_skips_push_and_exits_1(self):
         with patch("sync.pull_rebase", return_value=_pull_ok()), \
              patch("sync.fetch_cards", return_value=[CARD]), \
              patch("sync.parse_card", side_effect=ValueError("bad card")), \
@@ -194,9 +201,25 @@ class TestSyncRun(unittest.TestCase):
              patch("sync.archive_card") as mock_archive, \
              patch("sync.setup_logger", return_value=_mock_logger()), \
              patch("sync.log_event"):
-            sync.run()
+            with self.assertRaises(SystemExit) as ctx:
+                sync.run()
+            self.assertEqual(ctx.exception.code, 1)
             mock_push.assert_not_called()
             mock_archive.assert_not_called()
+
+    def test_clean_run_still_exits_0(self):
+        """Guard the other direction: making the exit code honest must not make
+        a fully successful run exit non-zero."""
+        with patch("sync.pull_rebase", return_value=_pull_ok()), \
+             patch("sync.fetch_cards", return_value=[CARD]), \
+             patch("sync.parse_card", return_value=(PATH, FM, BODY)), \
+             patch("sync.write_card", return_value=PATH), \
+             patch("sync.push_cards", return_value=_push_ok()), \
+             patch("sync.archive_card", return_value=_archive_ok()), \
+             patch("sync.record_success"), \
+             patch("sync.setup_logger", return_value=_mock_logger()), \
+             patch("sync.log_event"):
+            sync.run()  # must not raise SystemExit
 
 
 if __name__ == "__main__":

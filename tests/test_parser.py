@@ -1,5 +1,6 @@
 import sys
 import os
+import tempfile
 import unittest
 import yaml
 from pathlib import PurePosixPath
@@ -9,7 +10,14 @@ _mock_config = MagicMock()
 _mock_config.PKA_REPO_PATH = "/fake/pka"
 sys.modules["src.config"] = _mock_config
 
-from src.parser import slugify, unique_path, parse_card  # noqa: E402
+from src.parser import SLUG_MAX_CHARS, slugify, unique_path, parse_card  # noqa: E402
+
+# The real Trello card name that broke the 2026-09-25 run (card
+# 6ab4c838cbb3bbb0704019af, logged verbatim in logs/sync.log at
+# 2026-09-25T08:35:54). 952 characters of pasted Hebrew prose; the uncapped
+# slugify() turned it into a 903-character slug and a 949-character target
+# path, which Windows rejected with a misleading [Errno 2].
+LONG_HEBREW_CARD_NAME = "מצאתי את שלושת ה־repositories הרשמיים:  Ponytail – DietrichGebert/ponytail פלאג־אין ל־Claude Code ולסוכנים נוספים, המעודד פתרונות מינימליים לפי עקרונות YAGNI ושימוש חוזר בקוד קיים. לפי הבנצ'מרק של הפרויקט: כ־54% פחות שורות קוד, 22% פחות טוקנים ושמירה על בדיקות הבטיחות. חשוב לציין שאלו מדידות של מפתחי הפרויקט, לא מחקר עצמאי. Graphify – Graphify-Labs/graphify הופך קוד, תיעוד, סכמות SQL וקבצים נוספים לגרף ידע שניתן לתשאל. הוא תומך ב־Claude Code, Codex, Cursor ועוד. ניתן גם להתקין הנחיות או hooks שידחפו את הסוכן לשאול את הגרף לפני קריאה חוזרת של קובצי המקור. Agent Skills – addyosmani/agent-skills המאגר הרשמי של Addy Osmani. כיום יש בו למעשה 25 skills: ‏24 מיומנויות למחזור הפיתוח ועוד meta-skill בשם using-agent-skills. הוא כולל תמיכה מובנית ב־Claude Code וניתן להתקנה גם בסוכנים אחרים.  שלושתם פתוחים לשימוש עם רישיונות קוד פתוח. הניסוח ששלחת מדויק ברובו, אבל כדאי לעדכן את “חבילה של 24 מיומנויות” ל־“24 מיומנויות פיתוח, ובנוסף מיומנות ניהול אחת”."
 
 BASE_CARD = {
     "card_id": "abc123",
@@ -34,6 +42,69 @@ class TestSlugify(unittest.TestCase):
 
     def test_empty_returns_untitled(self):
         self.assertEqual(slugify("!!!"), "untitled")
+
+
+class TestSlugifyLengthCap(unittest.TestCase):
+    """Regression cover for the 2026-09-25 stuck-card defect: an uncapped slug
+    produced a path Windows could not create, so the note never landed, the
+    card was never archived, and it re-failed on every subsequent run."""
+
+    def test_slug_just_under_the_cap_is_untouched(self):
+        name = "-".join(["word"] * 14)  # 69 chars, under the cap
+        self.assertEqual(len(name), 69)
+        self.assertEqual(slugify(name), name)
+
+    def test_short_names_are_identical_to_pre_cap_behavior(self):
+        for name, expected in [
+            ("Oracle VM Setup", "oracle-vm-setup"),
+            ("Hello, World!", "hello-world"),
+            ("a  b", "a-b"),
+            ("!!!", "untitled"),
+            ("\u05de\u05e6\u05d0\u05ea\u05d9 \u05d0\u05ea \u05d6\u05d4", "\u05de\u05e6\u05d0\u05ea\u05d9-\u05d0\u05ea-\u05d6\u05d4"),
+        ]:
+            self.assertEqual(slugify(name), expected)
+
+    def test_long_name_is_capped(self):
+        slug = slugify(" ".join(["alpha"] * 100))
+        self.assertLessEqual(len(slug), SLUG_MAX_CHARS)
+
+    def test_cap_never_ends_mid_word_or_on_a_hyphen(self):
+        # 6-char words: the hard cut at 70 lands inside a word, so the slug
+        # must back up to the previous hyphen.
+        slug = slugify(" ".join(["abcdef"] * 40))
+        self.assertLessEqual(len(slug), SLUG_MAX_CHARS)
+        self.assertFalse(slug.endswith("-"))
+        self.assertTrue(all(tok == "abcdef" for tok in slug.split("-")))
+
+    def test_cut_landing_exactly_on_a_hyphen_keeps_the_whole_word(self):
+        # 7 words of 9 chars + 6 hyphens = 69 chars; char index 70 is a hyphen.
+        slug = slugify(" ".join(["abcdefghi"] * 8))
+        self.assertEqual(slug, "-".join(["abcdefghi"] * 7))
+
+    def test_hyphen_free_long_name_is_hard_cut(self):
+        # CJK prose has no spaces, so it slugifies to one long hyphen-free
+        # token. There is no word boundary to respect; it must still be cut.
+        slug = slugify("\u6309\u6027\u4ef7\u6bd4\u6392\u5e8f\u7684\u5faa\u8bc1\u751f\u6d3b\u6307\u5357" * 20)
+        self.assertEqual(len(slug), SLUG_MAX_CHARS)
+
+    def test_real_failing_hebrew_card_name_yields_a_creatable_file(self):
+        slug = slugify(LONG_HEBREW_CARD_NAME)
+        self.assertLessEqual(len(slug), SLUG_MAX_CHARS)
+        self.assertFalse(slug.endswith("-"))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "2026-09-24-%s.md" % slug)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("x")
+            self.assertTrue(os.path.exists(path))
+
+    def test_capped_slug_plus_collision_suffix_stays_inside_max_path(self):
+        card = {**BASE_CARD, "name": LONG_HEBREW_CARD_NAME, "list_name": "journal"}
+        with patch("src.parser.PKA_REPO_PATH", "C:/Users/shin_/myPKM"):
+            path, _, _ = parse_card(card)
+        # journal is the deepest target (PKM/Journal/YYYY/MM). Add the worst
+        # collision suffix unique_path() could append and stay far under the
+        # 259-char MAX_PATH ceiling measured on this machine.
+        self.assertLess(len(path[:-3] + "-999.md"), 200)
 
 
 class TestUniquePath(unittest.TestCase):

@@ -77,9 +77,22 @@ class _PkaWriterLock:
 
 
 def _run(args):
+    # encoding/errors are explicit on purpose (2026-09-25). `text=True` alone
+    # decodes with the locale encoding, which is cp1252 on this Windows box.
+    # Git echoes the commit message back on stdout, and card names contain
+    # Hebrew and CJK, so the decode raised
+    #     UnicodeDecodeError: 'charmap' codec can't decode byte 0x8f
+    # inside subprocess's stdout *reader thread*. That kills the thread, not
+    # the run — and it fails open in the worst way: the traceback lands on the
+    # console (it swallowed the visible output of the whole 2026-09-25 run) and
+    # `result.stdout` comes back as None, so any failure branch below that does
+    # `result.stderr.strip()` or `result.stdout + result.stderr` would raise on
+    # top of the original git error. Verified on this machine: locale is cp1252,
+    # `git log -1 --format=%s` on a CJK commit subject -> stdout is None with
+    # text=True alone, the full string with the two kwargs below.
     return subprocess.run(
         ["git", "-C", PKA_REPO_PATH] + args,
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 
