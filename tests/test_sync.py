@@ -149,6 +149,9 @@ class TestSyncRun(unittest.TestCase):
             mock_alert.assert_not_called()
 
     def test_archive_failure_alerts_once_threshold_is_crossed(self):
+        """The _flag_repeat_failure guardrail is unchanged by the honest exit:
+        it still records the failure and alerts on the threshold crossing. The
+        run now also exits 1 (see the archive tests below)."""
         with patch("sync.pull_rebase", return_value=_pull_ok()), \
              patch("sync.fetch_cards", return_value=[CARD]), \
              patch("sync.parse_card", return_value=(PATH, FM, BODY)), \
@@ -159,10 +162,128 @@ class TestSyncRun(unittest.TestCase):
              patch("sync.alert") as mock_alert, \
              patch("sync.setup_logger", return_value=_mock_logger()), \
              patch("sync.log_event"):
-            sync.run()
+            with self.assertRaises(SystemExit):
+                sync.run()
             mock_record_failure.assert_called_once_with("abc123", "My Card", "archive")
             mock_alert.assert_called_once()
             self.assertIn("abc123", mock_alert.call_args[0][0])
+
+    def test_archive_failure_exits_1_without_unwinding_the_push(self):
+        """A card that wrote and pushed but failed to archive will re-import as
+        a duplicate next run, so the run must not report success. The push and
+        the write already happened and are NOT unwound - only the exit code
+        changes."""
+        with patch("sync.pull_rebase", return_value=_pull_ok()), \
+             patch("sync.fetch_cards", return_value=[CARD]), \
+             patch("sync.parse_card", return_value=(PATH, FM, BODY)), \
+             patch("sync.write_card", return_value=PATH) as mock_write, \
+             patch("sync.push_cards", return_value=_push_ok()) as mock_push, \
+             patch("sync.archive_card", return_value=_archive_fail()), \
+             patch("sync.record_failure", return_value=(1, False)), \
+             patch("sync.record_success") as mock_record_success, \
+             patch("sync.alert") as mock_alert, \
+             patch("sync.setup_logger", return_value=_mock_logger()) as mock_setup, \
+             patch("sync.log_event"):
+            with self.assertRaises(SystemExit) as ctx:
+                sync.run()
+            self.assertEqual(ctx.exception.code, 1)
+            mock_write.assert_called_once()
+            mock_push.assert_called_once_with([PATH], ["My Card"])
+            mock_record_success.assert_not_called()
+            mock_alert.assert_not_called()
+            errors = " | ".join(
+                str(c[0][0]) for c in mock_setup.return_value.error.call_args_list
+            )
+            self.assertIn("failed to archive", errors)
+            self.assertIn("abc123", errors)
+
+    def test_one_archive_failure_does_not_stop_the_other_cards(self):
+        """A failure in one card must not abort the run: the second card is
+        still archived and recorded as a success."""
+        card2 = {**CARD, "card_id": "def456", "name": "Card 2"}
+        path2 = "/fake/pka/PKM/My Life/Topics/card-2.md"
+
+        def archive_side(card_id, name):
+            if card_id == "abc123":
+                return {
+                    "success": False,
+                    "card_id": card_id,
+                    "message": "Trello API error 429",
+                }
+            return {"success": True, "card_id": card_id, "message": f"Archived: {name}"}
+
+        with patch("sync.pull_rebase", return_value=_pull_ok()), \
+             patch("sync.fetch_cards", return_value=[CARD, card2]), \
+             patch("sync.parse_card", side_effect=[(PATH, FM, BODY), (path2, FM, BODY)]), \
+             patch("sync.write_card"), \
+             patch("sync.push_cards", return_value=_push_ok()) as mock_push, \
+             patch("sync.archive_card", side_effect=archive_side) as mock_archive, \
+             patch("sync.record_failure", return_value=(1, False)) as mock_record_failure, \
+             patch("sync.record_success") as mock_record_success, \
+             patch("sync.setup_logger", return_value=_mock_logger()), \
+             patch("sync.log_event"):
+            with self.assertRaises(SystemExit) as ctx:
+                sync.run()
+            self.assertEqual(ctx.exception.code, 1)
+            mock_push.assert_called_once_with([PATH, path2], ["My Card", "Card 2"])
+            self.assertEqual(mock_archive.call_count, 2)
+            mock_record_success.assert_called_once_with("def456")
+            mock_record_failure.assert_called_once_with("abc123", "My Card", "archive")
+
+    def test_write_and_archive_failures_exit_1_once_and_name_both_stages(self):
+        """Combined case: one card fails to write, another writes+pushes but
+        fails to archive, a third is clean. The run exits 1 exactly once and
+        the log names both stages, not just whichever is checked first."""
+        bad_write = {**CARD, "card_id": "wr111", "name": "Bad Write"}
+        bad_archive = {**CARD, "card_id": "ar222", "name": "Bad Archive"}
+        clean = {**CARD, "card_id": "ok333", "name": "Clean Card"}
+        path_bad_archive = "/fake/pka/PKM/My Life/Topics/bad-archive.md"
+        path_clean = "/fake/pka/PKM/My Life/Topics/clean-card.md"
+
+        def parse_side(card):
+            if card["card_id"] == "wr111":
+                raise ValueError("filename too long")
+            if card["card_id"] == "ar222":
+                return (path_bad_archive, FM, BODY)
+            return (path_clean, FM, BODY)
+
+        def archive_side(card_id, name):
+            if card_id == "ar222":
+                return {
+                    "success": False,
+                    "card_id": card_id,
+                    "message": "Trello API error 500",
+                }
+            return {"success": True, "card_id": card_id, "message": f"Archived: {name}"}
+
+        with patch("sync.pull_rebase", return_value=_pull_ok()), \
+             patch("sync.fetch_cards", return_value=[bad_write, bad_archive, clean]), \
+             patch("sync.parse_card", side_effect=parse_side), \
+             patch("sync.write_card"), \
+             patch("sync.push_cards", return_value=_push_ok()) as mock_push, \
+             patch("sync.archive_card", side_effect=archive_side), \
+             patch("sync.record_failure", return_value=(1, False)), \
+             patch("sync.record_success") as mock_record_success, \
+             patch("sync.setup_logger", return_value=_mock_logger()) as mock_setup, \
+             patch("sync.log_event"):
+            with self.assertRaises(SystemExit) as ctx:
+                sync.run()
+            self.assertEqual(ctx.exception.code, 1)
+            mock_push.assert_called_once_with(
+                [path_bad_archive, path_clean], ["Bad Archive", "Clean Card"]
+            )
+            mock_record_success.assert_called_once_with("ok333")
+            final = str(mock_setup.return_value.error.call_args_list[-1][0][0])
+            self.assertIn("failed to write", final)
+            self.assertIn("wr111", final)
+            self.assertIn("failed to archive", final)
+            self.assertIn("ar222", final)
+            self.assertNotIn("ok333", final)
+            self.assertEqual(
+                len([c for c in mock_setup.return_value.error.call_args_list
+                     if "exiting 1" in str(c[0][0])]),
+                1,
+            )
 
     def test_per_card_write_error_continues_with_others_but_exits_1(self):
         """One bad card must not abort the run — the healthy card still writes,
@@ -209,7 +330,8 @@ class TestSyncRun(unittest.TestCase):
 
     def test_clean_run_still_exits_0(self):
         """Guard the other direction: making the exit code honest must not make
-        a fully successful run exit non-zero."""
+        a fully successful run (write + push + archive all clean) exit
+        non-zero."""
         with patch("sync.pull_rebase", return_value=_pull_ok()), \
              patch("sync.fetch_cards", return_value=[CARD]), \
              patch("sync.parse_card", return_value=(PATH, FM, BODY)), \
